@@ -108,7 +108,7 @@ Each TPU v5e has 16GB of HBM which will require us to shard our model fairly agg
 
 LLaMA 3-70B has 8 KV heads, so the size per token is `2 * K * H * L = 2 * 8 * 128 * 80 = 160kB`.
 
-**Note just how big this is!** If we have a sequence length of 32k tokens (as is common), this uses `162e3 * 32,768 = 5.3GB / sequence`. For BS=240, this is 1.3TB! Since TPU v5e only have 16GB a piece, we would need about `(70e9 + 1.3e12) / 16e9 = 86` TPU v5e chips to even fit this much memory. Also note how large this is compared to the 70GB of model parameters.
+**Note just how big this is!** If we have a sequence length of 32k tokens (as is common), this uses `160e3 * 32,768 = 5.3GB / sequence`. For BS=240, this is 1.3TB! Since TPU v5e only have 16GB a piece, we would need about `(70e9 + 1.3e12) / 16e9 = 86` TPU v5e chips to even fit this much memory. Also note how large this is compared to the 70GB of model parameters.
 
 {% enddetails %}
 
@@ -134,7 +134,7 @@ $$\begin{align*}
 
 Here our critical batch size will be about 120 since our parameters are in int8 but our FLOPs are in bfloat16. We could also manually calculate the RHS maximum, but that's basically a calculation we've already done several times. **So we're well into the memory-bound regime for both our matmul and our FLOPs.**
 
-Strictly looking at memory bandwidth then, our step time is basically `(KV size + param size) / (8 * HBM bandwidth) = 112e9 / (8 * 8.1e11) = 17ms`. **So theoretically our step time is about 17ms.** Our throughput would be `32 / .017 = 1882 tokens / sec`, or `1882 / 8 = 235 tokens / sec / chip`.
+Strictly looking at memory bandwidth then, our step time is basically `(KV size + param size) / (8 * HBM bandwidth) = 112e9 / (8 * 8.2e11) = 17ms`. **So theoretically our step time is about 17ms.** Our throughput would be `32 / .017 = 1882 tokens / sec`, or `1882 / 8 = 235 tokens / sec / chip`.
 
 There's one caveat here which is to check if we might be ICI bound on our matmuls. We could dedicate 2 axes to it here, so we're ICI bound in theory when $Y > 2 * F / 2200 = 2 * 28672 / 2200 = 26$, so we're golden!
 
@@ -166,7 +166,7 @@ The case of int8 weights and bfloat16 FLOPs is quite common, since quantizing pa
 
 {% details Answer %}
 
-This is easy! If we're OK with a tiny batch size then the only limit is fitting parameter memory in HBM, i.e. it is just `ceil(num_params * sizeof(dtype) / HBM per TPU`, or `ceil(70e9 * sizeof(dtype) / 16e9)` rounded to the nearest reasonable topology (some multiple of 2):
+This is easy! If we're OK with a tiny batch size then the only limit is fitting parameter memory in HBM, i.e. it is just `ceil(num_params * sizeof(dtype) / HBM per TPU)`, or `ceil(70e9 * sizeof(dtype) / 16e9)` rounded to the nearest reasonable topology (some multiple of 2):
 
 | dtype | param size | KV size / token (bytes) | min TPU v5es | actual min slice | remaining HBM for KV caches | num KV caches @ 8k |
 | :---: | :--------: | :---------------------: | :----------: | :--------------: | :-------------------------: | :----------------: |
@@ -178,7 +178,7 @@ That's pretty cool! It tells us we could fit LLaMA 70B on a TPU v5e 2x2 if we wa
 
 {% enddetails %}
 
-**Question:** Assume we use the largest batch size that fits on these topologies, what latency we could expect for each generate step?
+**Question:** Assume we use the largest batch size that fits on these topologies, what latency could we expect for each generate step?
 
 {% details Answer %}
 
@@ -196,7 +196,7 @@ Likewise, in the FLOPs-bound regime (e.g. training or big-batch inference), we c
 
 This is an important question because it's exactly correlated with cost / token.
 
-With our assumption about median decode length, our throughput is just $$B / (\text{per-step latency} \cdot \text{median steps} \cdot N) \approxeq 43 / (0.019 * 512 * N)$$. This gives us roughly $$(4.42 / N)$$ QPS, so plugging in $$N$$ we get:
+With our assumption about median decode length, our throughput is just $$B / (\text{per-step latency} \cdot \text{median steps} \cdot N) \approx 43 / (0.019 * 512 * N)$$. This gives us roughly $$(4.42 / N)$$ QPS, so plugging in $$N$$ we get:
 
 |  dtype   | QPS / chip |
 | :------: | :--------: |
@@ -204,7 +204,7 @@ With our assumption about median decode length, our throughput is just $$B / (\t
 |   int8   |    0.55    |
 |   int4   |    1.11    |
 
-Note that this is rather optimistic since it totally ignores the working memory of the forward pass (memory allocated to activations and attention). This is not ridiculous with Flash Attention, but it is also not realistic. The real numbers are likely maybe 1/2 of this. For absolutely maximum throughput we would probably want to more than double the number of chips and increase the batch size significantly as well.
+Note that this is rather optimistic since it totally ignores the working memory of the forward pass (memory allocated to activations and attention). This is not ridiculous with Flash Attention, but it is also not realistic. The real numbers are likely around 1/2 of this. For absolutely maximum throughput we would probably want to more than double the number of chips and increase the batch size significantly as well.
 
 {% enddetails %}
 
@@ -240,9 +240,9 @@ However, as we've discussed, when our batch size is small we can often do more m
 
 $$\begin{align*}T_\text{ici comms} = \frac{2BD}{W_\text{ici}} && T_\text{hbm comms} = \frac{2DF}{Y \cdot W_\text{hbm}} && T_\text{math} = \frac{2BDF}{Y \cdot C}\end{align*}$$
 
-For a `4x8`, this would give us $T_\text{ici comms}$ = `(2 * 64 * 8192) / 9e10 = 11us`, $T_\text{hbm comms}$ = `(2 * 8192 * 28,672) / (32 * 8.1e11) = 18us`, and $T_\text{math}$ = `(2 * 64 * 8192 * 28,672) / (32 * 1.97e14) = 4us`, so in theory we're still HBM bandwidth bound, which is great! *Note that scaling up from a `4x4` to a `4x8` probably isn't helpful from a throughput standpoint, but it'll reduce our latency!
+For a `4x8`, this would give us $T_\text{ici comms}$ = `(2 * 64 * 8192) / 9e10 = 11us`, $T_\text{hbm comms}$ = `(2 * 8192 * 28,672) / (32 * 8.2e11) = 18us`, and $T_\text{math}$ = `(2 * 64 * 8192 * 28,672) / (32 * 1.97e14) = 4us`, so in theory we're still HBM bandwidth bound, which is great! *Note that scaling up from a `4x4` to a `4x8` probably isn't helpful from a throughput standpoint, but it'll reduce our latency!*
 
-If we look at the int8 and int4 configs, we _can_ do those with pure model parallelism. So we've hit a point at which quantization actually gives us a meaningful advantage beyond faster FLOPs: it lets us use a larger batch size before we become comms-bound. **So the end of this story is that we can't achieve peak throughput on a 4x8, but for the int8 and int4 configs we could do pure model parallelism*.
+If we look at the int8 and int4 configs, we _can_ do those with pure model parallelism. So we've hit a point at which quantization actually gives us a meaningful advantage beyond faster FLOPs: it lets us use a larger batch size before we become comms-bound. **So the end of this story is that we can't achieve peak throughput on a 4x8, but for the int8 and int4 configs we could do pure model parallelism.**
 
 {% enddetails %}
 
@@ -306,13 +306,13 @@ Here's the code for computing these rooflines:
 import numpy as np
 
 num_chips = 16  # we fix 16 as the amount of total model parallelism we do
-param_size = 70e9  # int8 means 1 byte per param
+bytes_per_param = 1  # int8 means 1 byte per param
+param_count = 70e9
+param_size = bytes_per_param * param_count
 sequence_length = 8192  # can vary this
 
 hbm_bandwidth = 8.20E+11  # v5e
 flops = 1.97E+14  # v5e
-
-param_size = bytes_per_param * param_count
 
 def kv_cache_size(bs):
     return 2 * bs * 128 * 8 * 80
@@ -320,15 +320,22 @@ def kv_cache_size(bs):
 def min_topology(bytes):
     return 2 ** np.ceil(np.log2(bytes / 16e9))
 
-def get_max_batch_size(max_num_chips: int = 16):
-  # for num_chips in topo_sizes:
+def get_max_batch_size(
+    num_chips: int,
+    sequence_length: int,
+    param_size: float,
+) -> int:
   batch_sizes = np.arange(1, 1024, 4)
   kv_sizes = kv_cache_size(sequence_length * batch_sizes)
-  num_chips = min_topology(kv_sizes + param_size)
-  max_idx = np.where(num_chips <= max_num_chips)[0][-1]
+  required_chips = min_topology(kv_sizes + param_size)
+  max_idx = np.where(required_chips <= num_chips)[0][-1]
   return max_idx
 
-max_idx = get_max_batch_size(num_chips, sequence_length, param_size)  # get the largest batch size that can fit
+max_idx = get_max_batch_size(
+    num_chips=num_chips,
+    sequence_length=sequence_length,
+    param_size=param_size,
+)  # get the largest batch size that can fit
 batch_sizes = np.arange(1, 512, 1)[:max_idx]
 kv_sizes = kv_cache_size(sequence_length * batch_sizes)
 
@@ -337,7 +344,7 @@ kv_comms_time = kv_sizes / (num_chips * hbm_bandwidth)
 param_comms_time = param_size / (num_chips * hbm_bandwidth)
 param_comms_time = np.asarray([param_comms_time] * batch_sizes.shape[0])
 
-flops_time = 2 * param_count * batch_sizes / (num_chips * flops)  # roughly true in a 2ND sense
+flops_time = 2 * param_size * batch_sizes / (num_chips * flops)  # roughly true in a 2ND sense
 
 mlp_time = np.maximum(flops_time, param_comms_time)
 attn_time = kv_comms_time  # always bandwidth-bound for generate
@@ -359,5 +366,17 @@ Here are a few worked problems. Some of these repeat things that are worked abov
 **Question 2:** Assume we want to serve LLaMA 3-8B with BS240 using int8 weights and int8 KV caches. How many bytes are used by (a) model parameters (b) KV caches and (c) peak working activations (roughly)? What's the smallest topology we can run this on?
 
 **Question 3:** How would you serve LLaMA 3-405B on TPU v5e? Assume int8 weights and bfloat16 FLOPs. Let's say we have a firm limit of 15ms / token, what's the highest throughput configuration we could achieve? What is the theoretical minimum step time?
+
+**Question 4:** The best way to learn about LLMs is to implement one from scratch. Building the full training pipeline is annoying and expensive, but turning trained weights you can [download from HuggingFace](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/) into a working inference implementation is extremely instructive. Roughly speaking, you should try to do the following:
+
+1. Download LLaMA 3 8B weights and load them in Colab. Visualize the weights (I like [TreeScope](https://github.com/google-deepmind/treescope) for this) and see if you can identify each tensor. Count the # of parameters. Does it match what you expect? How many are in the MLP vs. attention?
+
+2. Implement the full forward pass of the model. You don't need to worry about prefill/decode or anything fancy. Just get to the point where you can feed in a sequence and get plausible next-token probabilities out. You should be able to feed a prompt in, get probabilities out, pick the highest probability one, and repeat. This is slow but functional sampling. Try to only use the LLaMA-3 paper as a reference, but the [`jax-ml/jax-llm-examples/llama3`](https://github.com/jax-ml/jax-llm-examples/tree/main/llama3) repo can be a good reference for details (be careful of positional embeddings and causal masking). Your goal is to get coherent tokens out of the model. *You can run this all on a single TPU if you can get more than 16GiB of HBM.*
+
+3. Now it's time to make this faster. Implement KV caching, where you can save the key/value activations from a forward pass and attend to them in a subsequent one. This will make your sampling loop much faster.
+
+4. Implement separate prefill and decode servers. You can do these on different sets of chips. Prefill handles just a single prompt at once, then sends it to a batched decode server that handles batches of tokens.
+
+5. Implement Flash Attention in Pallas. This will make attention much more efficient. *I think it's good to try and do this without a reference.*
 
 <h3 markdown=1 class="next-section">That's all for Part 8! For Part 9, with a deep dive into XLA and TPU profiling, click [here](../profiling).</h3>

@@ -84,13 +84,13 @@ _styles: >
   }
 ---
 
-**Thank you for reading this set of essays and congratulations on making it all the way to the end.** Before we conclude, a few acknowledgments:
+**Thank you for reading the whole thing and congratulations on making it all the way to the end.** Before we conclude, a few acknowledgments:
 
 ## Acknowledgments
 
 This document represents a significant collective investment from many people at Google DeepMind, who we'd like to briefly acknowledge!
 
-- James Bradbury, Reiner Pope, and Blake Hechtman originally derived many of the ideas in this manuscript, and were early to understanding the systems view of the Transformer.
+- James Bradbury, Reiner Pope, Noam Shazeer, and Blake Hechtman originally derived many of the ideas in this manuscript, and were early to understand the systems view of the Transformer.
 - Sholto Douglas wrote the first version of this doc and is responsible for kicking off the project. He is more than anyone responsible for the overall narrative of this doc.
 - Jacob Austin led the work of transforming this first version from rough notes into a more polished and comprehensive artifact. He did much of the work of editing, formatting, and releasing this document, and coordinated contributions from other authors.
 - Most of the figures and animations were made by Anselm Levskaya and Charlie Chen.
@@ -120,6 +120,8 @@ There is a bunch of related writing, including the following:
 - [**Transformer Inference Arithmetic**](https://kipp.ly/transformer-inference-arithmetic/): a blog with many of the same ideas as this book and some excellent illustrations.
 - [**Stanford CS336 Slides and Videos**](https://stanford-cs336.github.io/spring2025/index.html#coursework): a fantastic Stanford course covering many details of LLM training and serving, with some useful exercises. Assignments 1 and 2 are particularly relevant.
 - [**Stas Bekman's ML Engineering Handbook**](https://github.com/stas00/ml-engineering): a highly practical guide to ML infrastructure, covering topics not addressed in this book like how to negotiate with cloud providers, cluster management, and empirical measurements of GPU throughput.
+- [**ezyang's blog**](https://blog.ezyang.com/2026/01/computing-sharding-with-einsum/): a PyTorch lead's blog on all things sharding + PyTorch, including a [guide to PyTorch internals](https://blog.ezyang.com/2019/05/pytorch-internals/) and a [writeup of sharded matrix multiplication](https://blog.ezyang.com/2026/01/computing-sharding-with-einsum/). Lots of other good things here.
+- [**The Anatomy of Collective Communication**](https://www.aleksagordic.com/blog/collective-operations): a nice walkthrough of GPU and TPU collectives in the spirit of this book. Has a better writeup of N-D and GPU collectives than this book.
 
 There remains a lot of room for comprehensive writing in this area, so we hope this manuscript encourages more of it! We also believe that this is a fruitful area to study and research. In many cases, it can be done even without having many hardware accelerators on hand.
 
